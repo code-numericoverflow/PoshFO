@@ -211,11 +211,36 @@ function New-AxTableFieldGroup {
     $axTableFieldGroup
 }
 
+function New-AxTableFieldRelation {
+    param (
+        [String]        $RelatedTable,
+        [String]        $RelatedField,
+        [String]        $ConstrainName     = $RelatedField,
+        [String]        $Field             = $RelatedField
+    )
+    [XML]$axXml = "<AxTableRelation>
+			                    <Name>$($RelatedTable)Relation</Name>
+			                    <RelatedTable>$RelatedTable</RelatedTable>
+			                    <Constraints>
+				                    <AxTableRelationConstraint xmlns=""""
+					                    i_type=""AxTableRelationConstraintField"">
+					                    <Name>$ConstrainName</Name>
+					                    <Field>$Field</Field>
+					                    <RelatedField>$RelatedField</RelatedField>
+				                    </AxTableRelationConstraint>
+			                    </Constraints>
+		                    </AxTableRelation>"
+
+    $axTableRelation = ConvertFrom-AxXml -AxXml $axXml
+    $axTableRelation
+}
+
 function New-AxMasterTable {
     param (
         [String]           $Name,
         [Object[]]         $AxTableFields          = @(),
         [Object[]]         $AxTableFieldGroups     = @(),
+        [Object[]]         $AxTableRelations       = @(),
         [String]           $IdField                = "",
         [String]           $DescriptionField       = "",
         [String]           $SingularLabel,
@@ -241,6 +266,52 @@ function New-AxMasterTable {
                     <AxTable xmlns:i=""http://www.w3.org/2001/XMLSchema-instance"">
 	                    <Name>$Name</Name>
 	                    <SourceCode>
+		                    <Declaration><![CDATA[
+public class $Name extends common
+{
+}
+]]></Declaration>
+		                    <Methods>
+			                    <Method>
+				                    <Name>Exist</Name>
+				                    <Source><![CDATA[
+/// <summary>
+/// Exist
+/// </summary>
+/// <tags>$Tags</tags>
+public static boolean Exist($IdField _$IdField)
+{
+    boolean found;
+
+    found = (select firstonly RecId from $variableName
+        where   $variableName.$IdField == _$IdField).RecId != 0;
+
+    return found;
+}
+]]></Source>
+			                    </Method>
+			                    <Method>
+				                    <Name>find</Name>
+				                    <Source><![CDATA[
+/// <summary>
+/// Find
+/// </summary>
+/// <tags>$Tags</tags>
+public static $Name find($IdField _$IdField,
+    boolean                 _forupdate          = false)
+{
+    $Name $variableName;
+
+    $variableName.selectForUpdate(_forupdate);
+
+    select firstonly $variableName
+        where   $variableName.$IdField == _$IdField;
+
+    return $variableName;
+}
+]]></Source>
+			                    </Method>
+		                    </Methods>
 	                    </SourceCode>
 	                    <Label>$Label</Label>
 	                    <SingularLabel>$SingularLabel</SingularLabel>
@@ -312,6 +383,18 @@ function New-AxMasterTable {
 	                    </Indexes>
 	                    <Mappings />
 	                    <Relations>
+		                    <AxTableRelation>
+			                    <Name>InventTableRelation</Name>
+			                    <RelatedTable>InventTable</RelatedTable>
+			                    <Constraints>
+				                    <AxTableRelationConstraint xmlns=""""
+					                    i:type=""AxTableRelationConstraintField"">
+					                    <Name>ItemId</Name>
+					                    <Field>ItemId</Field>
+					                    <RelatedField>ItemId</RelatedField>
+				                    </AxTableRelationConstraint>
+			                    </Constraints>
+		                    </AxTableRelation>
 	                    </Relations>
 	                    <StateMachines />
                     </AxTable>"
@@ -326,69 +409,12 @@ function New-AxMasterTable {
     $AxTableFieldGroups | ForEach-Object {
         $axMasterTable.AxTable.FieldGroups.AxTableFieldGroup.Add($_.AxTableFieldGroup)
     }
+    $axMasterTable.AxTable.Relations.AxTableRelation = [System.Collections.Generic.List[Object]] $axMasterTable.AxTable.Relations.AxTableRelation
+    $axMasterTable.AxTable.Relations.AxTableRelation.RemoveAt(0)
+    $AxTableRelations | ForEach-Object {
+        $axMasterTable.AxTable.Relations.AxTableRelation.Add($_.AxTableRelation)
+    }
     $axMasterTable
-
-#		                    <Declaration><![CDATA[
-#public class $Name extends common
-#{
-#}
-#]]></Declaration>
-#		                    <Methods>
-#			                    <Method>
-#				                    <Name>Exist</Name>
-#				                    <Source><![CDATA[
-#/// <summary>
-#/// Exist
-#/// </summary>
-#/// <tags>$Tags</tags>
-#public static boolean Exist($IdField _$IdField)
-#{
-#    boolean found;
-#
-#    found = (select firstonly RecId from $Name
-#        where   $Name.$IdField == _$IdField).RecId != 0;
-#
-#    return found;
-#}
-#]]></Source>
-#			                    </Method>
-#			                    <Method>
-#				                    <Name>find</Name>
-#				                    <Source><![CDATA[
-#/// <summary>
-#/// Find
-#/// </summary>
-#/// <tags>$Tags</tags>
-#public static $Name find($IdField _$IdField,
-#    boolean                 _forupdate          = false)
-#{
-#    $Name $variableName;
-#
-#    $variableName.selectForUpdate(_forupdate);
-#
-#    select firstonly $variableName
-#        where   $variableName.$IdField == _$IdField;
-#
-#    return $variableName;
-#}
-#]]></Source>
-#			                    </Method>
-#		                    </Methods>
-
-
-#		                    <AxTableRelation>
-#			                    <Name>InventTableRelation</Name>
-#			                    <RelatedTable>InventTable</RelatedTable>
-#			                    <Constraints>
-#				                    <AxTableRelationConstraint xmlns=""""
-#					                    i:type=""AxTableRelationConstraintField"">
-#					                    <Name>ItemId</Name>
-#					                    <Field>ItemId</Field>
-#					                    <RelatedField>ItemId</RelatedField>
-#				                    </AxTableRelationConstraint>
-#			                    </Constraints>
-#		                    </AxTableRelation>
-
 }
 
 function New-AxPackageDescriptor {
@@ -524,14 +550,15 @@ function New-AxProject {
 }
 
 $enum                  = New-AxEnum -Name "pepito" -AxEnumValues @((New-AxEnumValue -Name "pp" -Label "kk" ), (New-AxEnumValue -Name "pp2" -Label "kk2" ))
-$idEdt                 = New-AxEdt -Name "pepId" -Label "@FOR01" -BaseEdt AxEdtString -ReferenceTable Customers -RelatedField FirstName
+$idEdt                 = New-AxEdt -Name "pepId" -Label "@FOR01" -BaseEdt AxEdtString -ReferenceTable Customer -RelatedField FirstName
 $descriptionEdt        = New-AxEdt -Name "pepDescription" -Label "@FOR02" -BaseEdt AxEdtString
 $idTableField          = ConvertTo-AxTableFieldFromAxEdt -AxEdt $idEdt
 $descriptionTableField = ConvertTo-AxTableFieldFromAxEdt -AxEdt $descriptionEdt
 $pepitoTableField      = ConvertTo-AxTableFieldFromAxEnum -AxEnum $enum
 $tableGroupField       = ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTableField $descriptionTableField
 $tableFieldGroup       = New-AxTableFieldGroup      -Name MyTableGroup  -Label "@FOR03" -AxTableFieldGroupFields @($tableGroupField)
-$masterTable           = New-AxMasterTable          -Name MyMasterTable -Label "@FOR04" -AxTableFields @($idTableField, $descriptionTableField, $pepitoTableField) -AxTableFieldGroups @($tableFieldGroup)
+$tableFieldRelation    = New-AxTableFieldRelation   -RelatedTable InventTable -RelatedField ItemId
+$masterTable           = New-AxMasterTable          -Name MyMasterTable -Label "@FOR04" -AxTableFields @($idTableField, $descriptionTableField, $pepitoTableField) -AxTableFieldGroups @($tableFieldGroup) -AxTableRelations @($tableFieldRelation)
 $modelInfo             = New-AxModelInfo
 $project               = New-AxProject              -Name MyProject     -AxEnums $enum -AxEdts @($idEdt, $descriptionEdt) -AxTables $masterTable
 $descriptor            = New-AxPackageDescriptor
