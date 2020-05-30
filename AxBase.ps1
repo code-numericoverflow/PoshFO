@@ -16,7 +16,7 @@ function Save-AxObject {
     $newXml  = [Newtonsoft.Json.JsonConvert]::DeserializeXmlNode($newjson)
     $newXml.Save($Path)
     $text = Get-Content -Path $Path
-    Set-Content -Path $Path -Value $text.Replace("i_type", "i:type")
+    Set-Content -Path $Path -Value $text.Replace("i_type", "i:type").Replace("i_nil", "i:nil")
 }
 
 enum YesNo {
@@ -71,7 +71,7 @@ function New-AxEnum {
 function New-AxEdt {
     param (
         [String]           $Name,
-        [String]           $BaseEdt            = "AxEdtString",
+        [String]           $BaseEdt            = "AxEdtString",  # https://docs.microsoft.com/en-us/dynamicsax-2012/developer/primitive-data-types
         [String]           $ReferenceTable     = "",
         [String]           $RelatedField       = "",
         [int]              $StringSize         = 0,
@@ -110,7 +110,8 @@ function New-AxEdt {
 function New-AxTableField {
     param (
         [String]           $Name,
-        [String]           $Type               = "AxTableFieldString",
+        [ValidateSet("AxTableFieldString","AxTableFieldInt","AxTableFieldInt64", "AxTableFieldReal", "AxTableFieldTime", "AxTableFieldDate", "AxTableFieldUtcDateTime", "AxTableFieldEnum", "AxTableFieldBoolean")]
+        [String]           $Type               = "AxTableFieldString",  # https://docs.microsoft.com/en-us/dynamicsax-2012/developer/primitive-data-types
         [YesNo]            $AllowEdit          = [YesNo]::No,
         [String]           $ExtendedDataType   = "",
         [String]           $EnumType           = "",
@@ -141,17 +142,18 @@ function ConvertTo-AxTableFieldFromAxEdt {
         [YesNo]            $AllowEdit          = [YesNo]::Yes,
         [YesNo]            $Mandatory          = [YesNo]::Yes
     )
-    $type = switch ($AxEdt.AxEdt.'@i:type') {
-        "AxEdtString"      { "AxTableFieldString"      }
-        "AxEdtInt"         { "AxTableFieldInt"         }
-        "AxEdtInt64"       { "AxTableFieldInt64"       }
-        "AxEdtReal"        { "AxTableFieldReal"        }
-        "AxEdtTime"        { "AxTableFieldTime"        }
-        "AxEdtDate"        { "AxTableFieldDate"        }
-        "AxEdtUtcDateTime" { "AxTableFieldUtcDateTime" }
-        "AxEdtEnum"        { "AxTableFieldEnum"        }
-        default            { "AxTableFieldString"      }
-    }
+    #$type = switch ($AxEdt.AxEdt.'@i:type') {
+    #    "AxEdtString"      { "AxTableFieldString"      }
+    #    "AxEdtInt"         { "AxTableFieldInt"         }
+    #    "AxEdtInt64"       { "AxTableFieldInt64"       }
+    #    "AxEdtReal"        { "AxTableFieldReal"        }
+    #    "AxEdtTime"        { "AxTableFieldTime"        }
+    #    "AxEdtDate"        { "AxTableFieldDate"        }
+    #    "AxEdtUtcDateTime" { "AxTableFieldUtcDateTime" }
+    #    "AxEdtEnum"        { "AxTableFieldEnum"        }
+    #    default            { "AxTableFieldString"      }
+    #}
+    $type = ($AxEdt.AxEdt.'@i:type').Replace("AxEdt", "AxTableField")
     $axTableField = New-AxTableField -Name $Name -Type $type -AllowEdit $AllowEdit -Mandatory $Mandatory -ExtendedDataType $AxEdt.AxEdt.Name
     $axTableField
 }
@@ -417,6 +419,211 @@ public static $Name find($IdField _$IdField,
     $axMasterTable
 }
 
+function New-AxFormDataSourceField {
+    param (
+        [String]     $FieldName
+    )
+    [XML]$axXml = "<AxFormDataSourceField>
+					    <DataField>$FieldName</DataField>
+				    </AxFormDataSourceField>"
+
+    $axFormDataSourceField = ConvertFrom-AxXml -AxXml $axXml
+    $axFormDataSourceField
+}
+
+function New-AxFormControl {
+    param (
+        [String]    $Name,
+        [String]    $Type               = "String",
+        [String]    $DataField          = "",
+        [String]    $DataMethod         = "",
+        [String]    $DataSource,
+        [String]    $FormControlType    = "AxFormStringControl"   # https://docs.microsoft.com/en-us/dynamicsax-2012/developer/form-control-classes
+    )
+    [XML]$axXml = "<AxFormControl xmlns=""""
+						i_type=""$FormControlType"">
+						<Name>$Name</Name>
+						<Type>$Type</Type>
+						<FormControlExtension
+							i_nil=""true"" />
+						<DataMethod>$DatMethod</DataMethod>
+						<DataField>$DataField</DataField>
+						<DataSource>$DataSource</DataSource>
+					</AxFormControl>"
+
+    $axFormControl = ConvertFrom-AxXml -AxXml $axXml
+    if ($DataField -ne "") {
+        $axFormControl.AxFormControl.PSObject.Properties.Remove('DataMethod')
+    } else {
+        $axFormControl.AxFormControl.PSObject.Properties.Remove('DataField')
+    }
+    $axFormControl
+}
+
+function ConvertTo-AxFormControlFromAxTableField {
+    param (
+        $AxTableField,
+        [String]  $DataSourceName
+    )
+    $type = ($AxTableField.AxTableField.'@i_type').Replace("AxTableField", "")
+    $formControlType = "AxForm" + $type + "Control"
+    $axFormControl = New-AxFormControl -Type $type -Name ($AxTableField.AxTableField.Name + "Control") -DataField $AxTableField.AxTableField.Name -DataSource $DataSourceName -FormControlType $formControlType
+    $axFormControl
+}
+
+function New-AxSimpleListForm {
+    param (
+        [Object]      $AxTable,
+        [String]      $TableName                = $AxTable.AxTable.Name,
+        [Object[]]    $AxFormDataSourceFields   = (New-AxFormDataSourceField -FieldName $AxTable.AxTable.Fields.AxTableField[0].Name),
+        [Object[]]    $AxFormControls           = @(),
+        [String]      $Name                     = $TableName,
+        [String]      $DSName                   = $TableName,
+        [String]      $Caption                  = $AxTable.AxTable.Label,
+        [String]      $QuickFilterField         = $AxTable.AxTable.Fields.AxTableField[0].Name,
+        [String]      $ConfigurationKey
+    )
+    [XML]$axXml = "<?xml version=""1.0"" encoding=""utf-8""?>
+                    <AxForm xmlns:i=""http://www.w3.org/2001/XMLSchema-instance"" xmlns=""Microsoft.Dynamics.AX.Metadata.V6"">
+	                    <Name>$Name</Name>
+	                    <SourceCode>
+		                    <Methods xmlns="""">
+			                    <Method>
+				                    <Name>classDeclaration</Name>
+				                    <Source><![CDATA[
+[Form]
+public class $Name extends FormRun
+{
+}
+
+]]></Source>
+			                    </Method>
+		                    </Methods>
+		                    <DataSources xmlns="""" />
+		                    <DataControls xmlns="""" />
+		                    <Members xmlns="""" />
+	                    </SourceCode>
+	                    <DataSources>
+		                    <AxFormDataSource xmlns="""">
+			                    <Name>$DSName</Name>
+			                    <Table>$TableName</Table>
+			                    <Fields>
+				                    <AxFormDataSourceField>
+					                    <DataField>AssortmentGroupId</DataField>
+				                    </AxFormDataSourceField>
+			                    </Fields>
+			                    <ReferencedDataSources />
+			                    <DataSourceLinks />
+			                    <DerivedDataSources />
+		                    </AxFormDataSource>
+	                    </DataSources>
+	                    <Design>
+		                    <Caption xmlns="""">$Caption</Caption>
+		                    <DataSource xmlns="""">$DSName</DataSource>
+		                    <Pattern xmlns="""">SimpleList</Pattern>
+		                    <PatternVersion xmlns="""">1.1</PatternVersion>
+		                    <ShowDeleteButton xmlns="""">Yes</ShowDeleteButton>
+		                    <ShowNewButton xmlns="""">Yes</ShowNewButton>
+		                    <Style xmlns="""">SimpleList</Style>
+		                    <Controls xmlns="""">
+			                    <AxFormControl xmlns=""""
+				                    i:type=""AxFormActionPaneControl"">
+				                    <Name>ActionPane</Name>
+				                    <ConfigurationKey>$ConfigurationKey</ConfigurationKey>
+				                    <Type>ActionPane</Type>
+				                    <FormControlExtension
+					                    i:nil=""true"" />
+				                    <Controls>
+					                    <AxFormControl xmlns=""""
+						                    i:type=""AxFormButtonGroupControl"">
+						                    <Name>Txt</Name>
+						                    <Type>ButtonGroup</Type>
+						                    <FormControlExtension
+							                    i:nil=""true"" />
+						                    <Controls>
+						                    </Controls>
+						                    <DataSource>$DSName</DataSource>
+					                    </AxFormControl>
+				                    </Controls>
+			                    </AxFormControl>
+			                    <AxFormControl xmlns=""""
+				                    i:type=""AxFormGroupControl"">
+				                    <Name>FormGroup</Name>
+				                    <Pattern>CustomAndQuickFilters</Pattern>
+				                    <PatternVersion>1.1</PatternVersion>
+				                    <Type>Group</Type>
+				                    <WidthMode>SizeToAvailable</WidthMode>
+				                    <FormControlExtension
+					                    i:nil=""true"" />
+				                    <Controls>
+					                    <AxFormControl>
+						                    <Name>QuickFilter</Name>
+						                    <FormControlExtension>
+							                    <Name>QuickFilterControl</Name>
+							                    <ExtensionComponents />
+							                    <ExtensionProperties>
+								                    <AxFormControlExtensionProperty>
+									                    <Name>targetControlName</Name>
+									                    <Type>String</Type>
+									                    <Value>Grid</Value>
+								                    </AxFormControlExtensionProperty>
+								                    <AxFormControlExtensionProperty>
+									                    <Name>placeholderText</Name>
+									                    <Type>String</Type>
+								                    </AxFormControlExtensionProperty>
+								                    <AxFormControlExtensionProperty>
+									                    <Name>defaultColumnName</Name>
+									                    <Type>String</Type>
+									                    <Value>Grid_$QuickFilterField</Value>
+								                    </AxFormControlExtensionProperty>
+							                    </ExtensionProperties>
+						                    </FormControlExtension>
+					                    </AxFormControl>
+				                    </Controls>
+				                    <ArrangeMethod>HorizontalLeft</ArrangeMethod>
+				                    <DataSource>$DSName</DataSource>
+				                    <FrameType>None</FrameType>
+				                    <Style>CustomFilter</Style>
+				                    <ViewEditMode>Edit</ViewEditMode>
+			                    </AxFormControl>
+			                    <AxFormControl xmlns=""""
+				                    i:type=""AxFormGridControl"">
+				                    <Name>Grid</Name>
+				                    <Type>Grid</Type>
+				                    <FormControlExtension
+					                    i:nil=""true"" />
+				                    <Controls>
+					                    <AxFormControl xmlns=""""
+						                    i:type=""AxFormStringControl"">
+						                    <Name>Grid_AssortmentGroupId</Name>
+						                    <Type>String</Type>
+						                    <FormControlExtension
+							                    i:nil=""true"" />
+						                    <DataField>AssortmentGroupId</DataField>
+						                    <DataSource>$DSName</DataSource>
+					                    </AxFormControl>
+				                    </Controls>
+				                    <DataSource>$DSName</DataSource>
+				                    <Style>Tabular</Style>
+			                    </AxFormControl>
+		                    </Controls>
+	                    </Design>
+	                    <Parts />
+                    </AxForm>" 
+
+    $axSimpleListForm = ConvertFrom-AxXml -AxXml $axXml
+    # AxFormDataSourceField
+    $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField = [System.Collections.Generic.List[Object]] $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField
+    $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField.RemoveAt(0)
+    $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField.AddRange($AxFormDataSourceFields)
+    # AxFormControl
+    $axSimpleListForm.AxForm.Design.Controls.AxFormControl = [System.Collections.Generic.List[Object]] $axSimpleListForm.AxForm.Design.Controls.AxFormControl
+    $axSimpleListForm.AxForm.Design.Controls.AxFormControl.RemoveAt(2)
+    $axSimpleListForm.AxForm.Design.Controls.AxFormControl.AddRange($AxFormControls)
+
+    $axSimpleListForm
+}
+
 function New-AxPackageDescriptor {
     [XML]$axXml = "<PackageDescriptor xmlns=""http://schemas.datacontract.org/2004/07/Microsoft.Dynamics.Framework.Tools.ProjectSystem.ExportImport"" xmlns:i=""http://www.w3.org/2001/XMLSchema-instance"">
                   <ContentResourceDictionary xmlns:a=""http://schemas.microsoft.com/2003/10/Serialization/Arrays""/>
@@ -559,6 +766,11 @@ $tableGroupField       = ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTab
 $tableFieldGroup       = New-AxTableFieldGroup      -Name MyTableGroup  -Label "@FOR03" -AxTableFieldGroupFields @($tableGroupField)
 $tableFieldRelation    = New-AxTableFieldRelation   -RelatedTable InventTable -RelatedField ItemId
 $masterTable           = New-AxMasterTable          -Name MyMasterTable -Label "@FOR04" -AxTableFields @($idTableField, $descriptionTableField, $pepitoTableField) -AxTableFieldGroups @($tableFieldGroup) -AxTableRelations @($tableFieldRelation)
+$dsField0              = New-AxFormDataSourceField  -FieldName $masterTable.AxTable.Fields.AxTableField[0].Name
+$dsField1              = New-AxFormDataSourceField  -FieldName $masterTable.AxTable.Fields.AxTableField[1].Name
+$control0              = ConvertTo-AxFormControlFromAxTableField -AxTableField $idTableField -DataSourceName $masterTable.AxTable.Name
+$control1              = ConvertTo-AxFormControlFromAxTableField -AxTableField $descriptionTableField -DataSourceName $masterTable.AxTable.Name
+$masterTableForm       = New-AxSimpleListForm       -AxTable $masterTable -AxFormDataSourceFields @($dsField0, $dsField1) -AxFormControls @($control0, $control1)
 $modelInfo             = New-AxModelInfo
 $project               = New-AxProject              -Name MyProject     -AxEnums $enum -AxEdts @($idEdt, $descriptionEdt) -AxTables $masterTable
 $descriptor            = New-AxPackageDescriptor
@@ -568,6 +780,7 @@ Remove-Item "C:\WINDOWS\TEMP\TestFO" -Recurse -Force
 MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEnum"  -ErrorAction SilentlyContinue | Out-Null
 MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEdt"   -ErrorAction SilentlyContinue | Out-Null
 MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxTable" -ErrorAction SilentlyContinue | Out-Null
+MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxForm"  -ErrorAction SilentlyContinue | Out-Null
 MkDir "C:\WINDOWS\TEMP\TestFO\Model"               -ErrorAction SilentlyContinue | Out-Null
 MkDir "C:\WINDOWS\TEMP\TestFO\Project"             -ErrorAction SilentlyContinue | Out-Null
 
@@ -575,6 +788,7 @@ Save-AxObject -InputObject $enum             -Path "C:\WINDOWS\TEMP\TestFO\Proje
 Save-AxObject -InputObject $idEdt            -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEdt\pepId.xml"
 Save-AxObject -InputObject $descriptionEdt   -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEdt\pepDescription.xml"
 Save-AxObject -InputObject $masterTable      -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxTable\MyMasterTable.xml"
+Save-AxObject -InputObject $masterTableForm  -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxForm\MyMasterTableForm.xml"
 Save-AxObject -InputObject $modelInfo        -Path "C:\WINDOWS\TEMP\TestFO\Model\FleetManagement.xml"
 Save-AxObject -InputObject $project          -Path "C:\WINDOWS\TEMP\TestFO\Project\MyProject.rnrproj"
 Save-AxObject -InputObject $descriptor       -Path "C:\WINDOWS\TEMP\TestFO\BA6BECB9-70B9-4E31-BD29-1A3725A0BA4F.xml"
@@ -582,3 +796,4 @@ Save-AxObject -InputObject $descriptor       -Path "C:\WINDOWS\TEMP\TestFO\BA6BE
 Compress-Archive -Path "C:\WINDOWS\TEMP\TestFO\*" -DestinationPath "C:\WINDOWS\TEMP\TestFO.zip" -Force
 Remove-Item "C:\WINDOWS\TEMP\TestFO.axpp" -Force
 Rename-Item "C:\WINDOWS\TEMP\TestFO.zip" "C:\WINDOWS\TEMP\TestFO.axpp" -Force
+
