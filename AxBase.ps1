@@ -71,7 +71,9 @@ function New-AxEnum {
 function New-AxEdt {
     param (
         [String]           $Name,
-        [String]           $BaseEdt            = "AxEdtString",  # https://docs.microsoft.com/en-us/dynamicsax-2012/developer/primitive-data-types
+        [ValidateSet("AxEdtString","AxEdtInt","AxEdtInt64", "AxEdtReal", "AxEdtTime", "AxEdtDate", "AxEdtUtcDateTime", "AxEdtEnum", "AxEdtBoolean")]
+        [String]           $Type               = "AxEdtString",
+        [String]           $Extends            = "",
         [String]           $ReferenceTable     = "",
         [String]           $RelatedField       = "",
         [int]              $StringSize         = 0,
@@ -80,9 +82,10 @@ function New-AxEdt {
     )
     [XML]$axXml = "<?xml version=""1.0"" encoding=""utf-8""?>
                     <AxEdt xmlns:i=""http://www.w3.org/2001/XMLSchema-instance"" xmlns=""""
-	                    i:type=""$BaseEdt"">
+	                    i_type=""$Type"">
 	                    <Name>$Name</Name>
 	                    <Label>$Label</Label>
+                    	<Extends>$Extends</Extends>
 	                    <ReferenceTable>$ReferenceTable</ReferenceTable>
 	                    <Tags>$Tags</Tags>
 	                    <ArrayElements />
@@ -101,8 +104,11 @@ function New-AxEdt {
         $axEdt.AxEdt.PSObject.Properties.Remove('ReferenceTable')
         $axEdt.AxEdt.TableReferences.PSObject.Properties.Remove('AxEdtTableReference')
     }
-    if ($BaseEdt -ne "AxEdtString" -or $StringSize -eq 0) {
+    if ($Type -ne "AxEdtString" -or $StringSize -eq 0) {
         $axEdt.AxEdt.PSObject.Properties.Remove('StringSize')
+    }
+    if ($Extends -eq "") {
+        $axEdt.AxEdt.PSObject.Properties.Remove('Extends')
     }
     $axEdt
 }
@@ -111,11 +117,11 @@ function New-AxTableField {
     param (
         [String]           $Name,
         [ValidateSet("AxTableFieldString","AxTableFieldInt","AxTableFieldInt64", "AxTableFieldReal", "AxTableFieldTime", "AxTableFieldDate", "AxTableFieldUtcDateTime", "AxTableFieldEnum", "AxTableFieldBoolean")]
-        [String]           $Type               = "AxTableFieldString",  # https://docs.microsoft.com/en-us/dynamicsax-2012/developer/primitive-data-types
-        [YesNo]            $AllowEdit          = [YesNo]::No,
+        [String]           $Type               = "AxTableFieldString",
+        [String]           $AllowEdit          = [YesNo]::No,
         [String]           $ExtendedDataType   = "",
         [String]           $EnumType           = "",
-        [YesNo]            $Mandatory          = [YesNo]::No
+        [String]           $Mandatory          = [YesNo]::No
     )
     [XML]$axXml = "<AxTableField xmlns=""""
 	                i_type=""$Type"">
@@ -139,21 +145,10 @@ function ConvertTo-AxTableFieldFromAxEdt {
     param (
         $AxEdt,
         [String]           $Name               = $AxEdt.AxEdt.Name,
-        [YesNo]            $AllowEdit          = [YesNo]::Yes,
-        [YesNo]            $Mandatory          = [YesNo]::Yes
+        [String]           $AllowEdit          = [YesNo]::Yes,
+        [String]           $Mandatory          = [YesNo]::Yes
     )
-    #$type = switch ($AxEdt.AxEdt.'@i:type') {
-    #    "AxEdtString"      { "AxTableFieldString"      }
-    #    "AxEdtInt"         { "AxTableFieldInt"         }
-    #    "AxEdtInt64"       { "AxTableFieldInt64"       }
-    #    "AxEdtReal"        { "AxTableFieldReal"        }
-    #    "AxEdtTime"        { "AxTableFieldTime"        }
-    #    "AxEdtDate"        { "AxTableFieldDate"        }
-    #    "AxEdtUtcDateTime" { "AxTableFieldUtcDateTime" }
-    #    "AxEdtEnum"        { "AxTableFieldEnum"        }
-    #    default            { "AxTableFieldString"      }
-    #}
-    $type = ($AxEdt.AxEdt.'@i:type').Replace("AxEdt", "AxTableField")
+    $type = ($AxEdt.AxEdt.'@i_type').Replace("AxEdt", "AxTableField")
     $axTableField = New-AxTableField -Name $Name -Type $type -AllowEdit $AllowEdit -Mandatory $Mandatory -ExtendedDataType $AxEdt.AxEdt.Name
     $axTableField
 }
@@ -162,8 +157,8 @@ function ConvertTo-AxTableFieldFromAxEnum {
     param (
         $AxEnum,
         [String]           $Name               = $AxEnum.AxEnum.Name,
-        [YesNo]            $AllowEdit          = [YesNo]::Yes,
-        [YesNo]            $Mandatory          = [YesNo]::Yes
+        [String]           $AllowEdit          = [YesNo]::Yes,
+        [String]           $Mandatory          = [YesNo]::Yes
     )
     $type = "AxTableFieldEnum"
     $axTableField = New-AxTableField -Name $Name -Type $type -AllowEdit $AllowEdit -Mandatory $Mandatory -EnumType $AxEnum.AxEnum.Name
@@ -207,9 +202,11 @@ function New-AxTableFieldGroup {
 		                    </AxTableFieldGroup>"
 
     $axTableFieldGroup = ConvertFrom-AxXml -AxXml $axXml
-    $axTableFieldGroup.AxTableFieldGroup.Fields = [System.Collections.Generic.List[Object]] $axTableFieldGroup.AxTableFieldGroup.Fields
-    $axTableFieldGroup.AxTableFieldGroup.Fields.RemoveAt(0)
-    $axTableFieldGroup.AxTableFieldGroup.Fields.AddRange($AxTableFieldGroupFields)
+    $axTableFieldGroup.AxTableFieldGroup.Fields.AxTableFieldGroupField = [System.Collections.Generic.List[Object]] $axTableFieldGroup.AxTableFieldGroup.Fields.AxTableFieldGroupField
+    $axTableFieldGroup.AxTableFieldGroup.Fields.AxTableFieldGroupField.RemoveAt(0)
+    $AxTableFieldGroupFields | ForEach-Object {
+        $axTableFieldGroup.AxTableFieldGroup.Fields.AxTableFieldGroupField.Add($_.AxTableFieldGroupField)
+    }
     $axTableFieldGroup
 }
 
@@ -237,33 +234,130 @@ function New-AxTableFieldRelation {
     $axTableRelation
 }
 
-function New-AxMasterTable {
+function New-AxTableIndexField {
+    param (
+        [String]     $DataFieldName
+    )
+    [XML]$axXml = "<AxTableIndexField>
+					    <DataField>$DataFieldName</DataField>
+				    </AxTableIndexField>"
+
+    $axTableIndexField = ConvertFrom-AxXml -AxXml $axXml
+    $axTableIndexField
+}
+
+function ConvertTo-AxTableIndexFieldFromFromAxTableField {
+    param (
+        $AxTableField
+    )
+    $axTableField = New-AxTableIndexField -DataFieldName $AxTableField.AxTableField.Name
+    $axTableField
+}
+
+function New-AxTableIndex {
+    param (
+        [String]        $Name,
+        [String]        $AlternateKey             ,
+        [Object]        $AxTableIndexFields       = @()
+    )
+	[XML]$axXml = "<AxTableIndex>
+			            <Name>$Name</Name>
+			            <AlternateKey>$AlternateKey</AlternateKey>
+			            <Fields>
+				            <AxTableIndexField>
+					            <DataField>DataFieldSample</DataField>
+				            </AxTableIndexField>
+			            </Fields>
+		            </AxTableIndex>"
+
+    $axTableIndex = ConvertFrom-AxXml -AxXml $axXml
+    $axTableIndex.AxTableIndex.Fields.AxTableIndexField = [System.Collections.Generic.List[Object]] $axTableIndex.AxTableIndex.Fields.AxTableIndexField
+    $axTableIndex.AxTableIndex.Fields.AxTableIndexField.RemoveAt(0)
+    $AxTableIndexFields | ForEach-Object {
+        $axTableIndex.AxTableIndex.Fields.AxTableIndexField.Add($_.AxTableIndexField)
+    }
+    $axTableIndex
+}
+
+function New-AxMethod {
+    param (
+        [String]   $Name,
+        [String]   $Source
+    )
+    [XML]$axXml = "<Method>
+				                    <Name>$Name</Name>
+				                    <Source><![CDATA[
+$Source
+]]></Source>
+			                    </Method>"
+    $axMethod = ConvertFrom-AxXml -AxXml $axXml
+    $axMethod
+}
+
+function New-AxExistMethod {
+    param (
+        [String]    $IdField        = "",
+        [String]    $VariableName   = "",
+        [String]    $Tags           = ""
+    )
+    New-AxMethod -Name Exist -Source "
+/// <summary>
+/// Exist
+/// </summary>
+/// <tags>$Tags</tags>
+public static boolean Exist($IdField _$IdField)
+{
+    boolean found;
+
+    found = (select firstonly RecId from $variableName
+        where   $variableName.$IdField == _$IdField).RecId != 0;
+
+    return found;
+}
+"
+}
+
+function New-AxFindMethod {
+    param (
+        [String]    $IdField        = "",
+        [String]    $Name           = "",
+        [String]    $VariableName   = $Name.ToLower(),
+        [String]    $Tags           = ""
+    )
+    New-AxMethod -Name Find -Source "
+/// <summary>
+/// Find
+/// </summary>
+/// <tags>$Tags</tags>
+public static $Name find($IdField _$IdField,
+    boolean                 _forupdate          = false)
+{
+    $Name $variableName;
+
+    $variableName.selectForUpdate(_forupdate);
+
+    select firstonly $variableName
+        where   $variableName.$IdField == _$IdField;
+
+    return $variableName;
+}
+"
+}
+
+function New-AxTable {
     param (
         [String]           $Name,
-        [Object[]]         $AxTableFields          = @(),
-        [Object[]]         $AxTableFieldGroups     = @(),
-        [Object[]]         $AxTableRelations       = @(),
-        [String]           $IdField                = "",
-        [String]           $DescriptionField       = "",
         [String]           $SingularLabel,
         [String]           $Label                  = $SingularLabel,
-        [String]           $TitleField1            = $IdField,
-        [String]           $TitleField2            = $DescriptionField,
+        [Object[]]         $AxTableFields          = @(),
+        [Object[]]         $AxTableFieldGroups     = @(),
+        [Object[]]         $AxTableIndexes         = @(),
+        [Object[]]         $AxTableRelations       = @(),
+        [String]           $TitleField1            = $AxTableFields[0].AxTableField.Name,
+        [String]           $TitleField2            = $AxTableFields[1].AxTableField.Name,
+        [String]           $PrimaryIndexName       = $AxTableIndexes[0].AxTableIndex.Name,
         [String]           $Tags
     )
-    if ($IdField -eq "") {
-        $IdField = $AxTableFields[0].AxTableField.Name
-    }
-    if ($TitleField1 -eq "") {
-        $TitleField1 = $IdField
-    } 
-    if ($DescriptionField -eq "") {
-        $DescriptionField = $AxTableFields[1].AxTableField.Name
-    }
-    if ($TitleField2 -eq "") {
-        $TitleField2 = $DescriptionField
-    } 
-    $variableName = $Name.ToLower()
     [XML]$axXml = "<?xml version=""1.0"" encoding=""utf-8""?>
                     <AxTable xmlns:i=""http://www.w3.org/2001/XMLSchema-instance"">
 	                    <Name>$Name</Name>
@@ -292,27 +386,6 @@ public static boolean Exist($IdField _$IdField)
 }
 ]]></Source>
 			                    </Method>
-			                    <Method>
-				                    <Name>find</Name>
-				                    <Source><![CDATA[
-/// <summary>
-/// Find
-/// </summary>
-/// <tags>$Tags</tags>
-public static $Name find($IdField _$IdField,
-    boolean                 _forupdate          = false)
-{
-    $Name $variableName;
-
-    $variableName.selectForUpdate(_forupdate);
-
-    select firstonly $variableName
-        where   $variableName.$IdField == _$IdField;
-
-    return $variableName;
-}
-]]></Source>
-			                    </Method>
 		                    </Methods>
 	                    </SourceCode>
 	                    <Label>$Label</Label>
@@ -323,14 +396,14 @@ public static $Name find($IdField _$IdField,
 	                    <Tags>$Tags</Tags>
 	                    <TitleField1>$TitleField1</TitleField1>
 	                    <TitleField2>$TitleField2</TitleField2>
-	                    <PrimaryIndex>$IdFieldIdx</PrimaryIndex>
+	                    <PrimaryIndex>$PrimaryIndexName</PrimaryIndex>
 	                    <DeleteActions />
 	                    <FieldGroups>
 		                    <AxTableFieldGroup>
 			                    <Name>AutoReport</Name>
 			                    <Fields>
 				                    <AxTableFieldGroupField>
-					                    <DataField>$IdField</DataField>
+					                    <DataField>$TitleField1</DataField>
 				                    </AxTableFieldGroupField>
 				                    <AxTableFieldGroupField>
 					                    <DataField>$TitleField2</DataField>
@@ -341,7 +414,7 @@ public static $Name find($IdField _$IdField,
 			                    <Name>AutoLookup</Name>
 			                    <Fields>
 				                    <AxTableFieldGroupField>
-					                    <DataField>$IdField</DataField>
+					                    <DataField>$TitleField1</DataField>
 				                    </AxTableFieldGroupField>
 				                    <AxTableFieldGroupField>
 					                    <DataField>$TitleField2</DataField>
@@ -364,21 +437,21 @@ public static $Name find($IdField _$IdField,
 	                    </FieldGroups>
 	                    <Fields>
 		                    <AxTableField xmlns=""""
-			                    i:type=""AxTableFieldString"">
-			                    <Name>ForPersonId</Name>
+			                    i_type=""AxTableFieldString"">
+			                    <Name>TableFieldNameSample</Name>
 			                    <AllowEdit>No</AllowEdit>
-			                    <ExtendedDataType>ForPersonId</ExtendedDataType>
+			                    <ExtendedDataType>ExtendedDataTypeSample</ExtendedDataType>
 			                    <Mandatory>Yes</Mandatory>
 		                    </AxTableField>
 	                    </Fields>
 	                    <FullTextIndexes />
 	                    <Indexes>
 		                    <AxTableIndex>
-			                    <Name>$($IdField)Idx</Name>
+			                    <Name>IndexNameSample</Name>
 			                    <AlternateKey>Yes</AlternateKey>
 			                    <Fields>
 				                    <AxTableIndexField>
-					                    <DataField>$IdField</DataField>
+					                    <DataField>TableIndexFieldSample</DataField>
 				                    </AxTableIndexField>
 			                    </Fields>
 		                    </AxTableIndex>
@@ -390,7 +463,7 @@ public static $Name find($IdField _$IdField,
 			                    <RelatedTable>InventTable</RelatedTable>
 			                    <Constraints>
 				                    <AxTableRelationConstraint xmlns=""""
-					                    i:type=""AxTableRelationConstraintField"">
+					                    i_type=""AxTableRelationConstraintField"">
 					                    <Name>ItemId</Name>
 					                    <Field>ItemId</Field>
 					                    <RelatedField>ItemId</RelatedField>
@@ -401,22 +474,35 @@ public static $Name find($IdField _$IdField,
 	                    <StateMachines />
                     </AxTable>"
 
-    $axMasterTable = ConvertFrom-AxXml -AxXml $axXml
-    $axMasterTable.AxTable.Fields.AxTableField = [System.Collections.Generic.List[Object]] $axMasterTable.AxTable.Fields.AxTableField
-    $axMasterTable.AxTable.Fields.AxTableField.RemoveAt(0)
+    $axTable = ConvertFrom-AxXml -AxXml $axXml
+    $axTable.AxTable.SourceCode.Methods.Method = [System.Collections.Generic.List[Object]] $axTable.AxTable.SourceCode.Methods.Method
+    $axTable.AxTable.SourceCode.Methods.Method.RemoveAt(0)
+    if ($PrimaryIndexName -ne "") {
+        $existMethod = New-AxExistMethod -IdField $TitleField1 -VariableName $Name -Tags $Tags
+        $axTable.AxTable.SourceCode.Methods.Method.Add($existMethod.Method)
+        $findMethod = New-AxFindMethod -IdField $TitleField1 -Name $Name -Tags $Tags
+        $axTable.AxTable.SourceCode.Methods.Method.Add($findMethod.Method)
+    }
+    $axTable.AxTable.Fields.AxTableField = [System.Collections.Generic.List[Object]] $axTable.AxTable.Fields.AxTableField
+    $axTable.AxTable.Fields.AxTableField.RemoveAt(0)
     $AxTableFields | ForEach-Object {
-        $axMasterTable.AxTable.Fields.AxTableField.Add($_.AxTableField)
+        $axTable.AxTable.Fields.AxTableField.Add($_.AxTableField)
     }
-    $axMasterTable.AxTable.FieldGroups.AxTableFieldGroup = [System.Collections.Generic.List[Object]] $axMasterTable.AxTable.FieldGroups.AxTableFieldGroup
+    $axTable.AxTable.FieldGroups.AxTableFieldGroup = [System.Collections.Generic.List[Object]] $axTable.AxTable.FieldGroups.AxTableFieldGroup
     $AxTableFieldGroups | ForEach-Object {
-        $axMasterTable.AxTable.FieldGroups.AxTableFieldGroup.Add($_.AxTableFieldGroup)
+        $axTable.AxTable.FieldGroups.AxTableFieldGroup.Add($_.AxTableFieldGroup)
     }
-    $axMasterTable.AxTable.Relations.AxTableRelation = [System.Collections.Generic.List[Object]] $axMasterTable.AxTable.Relations.AxTableRelation
-    $axMasterTable.AxTable.Relations.AxTableRelation.RemoveAt(0)
+    $axTable.AxTable.Indexes.AxTableIndex = [System.Collections.Generic.List[Object]] $axTable.AxTable.Indexes.AxTableIndex
+    $axTable.AxTable.Indexes.AxTableIndex.RemoveAt(0)
+    $AxTableIndexes | ForEach-Object {
+        $axTable.AxTable.Indexes.AxTableIndex.Add($_.AxTableIndex)
+    }
+    $axTable.AxTable.Relations.AxTableRelation = [System.Collections.Generic.List[Object]] $axTable.AxTable.Relations.AxTableRelation
+    $axTable.AxTable.Relations.AxTableRelation.RemoveAt(0)
     $AxTableRelations | ForEach-Object {
-        $axMasterTable.AxTable.Relations.AxTableRelation.Add($_.AxTableRelation)
+        $axTable.AxTable.Relations.AxTableRelation.Add($_.AxTableRelation)
     }
-    $axMasterTable
+    $axTable
 }
 
 function New-AxFormDataSourceField {
@@ -475,7 +561,7 @@ function New-AxSimpleListForm {
     param (
         [Object]      $AxTable,
         [String]      $TableName                = $AxTable.AxTable.Name,
-        [Object[]]    $AxFormDataSourceFields   = (New-AxFormDataSourceField -FieldName $AxTable.AxTable.Fields.AxTableField[0].Name),
+        [Object[]]    $AxFormDataSourceFields   = @(),
         [Object[]]    $AxFormControls           = @(),
         [String]      $Name                     = $TableName,
         [String]      $DSName                   = $TableName,
@@ -527,7 +613,7 @@ public class $Name extends FormRun
 		                    <Style xmlns="""">SimpleList</Style>
 		                    <Controls xmlns="""">
 			                    <AxFormControl xmlns=""""
-				                    i:type=""AxFormActionPaneControl"">
+				                    i_type=""AxFormActionPaneControl"">
 				                    <Name>ActionPane</Name>
 				                    <ConfigurationKey>$ConfigurationKey</ConfigurationKey>
 				                    <Type>ActionPane</Type>
@@ -535,7 +621,7 @@ public class $Name extends FormRun
 					                    i:nil=""true"" />
 				                    <Controls>
 					                    <AxFormControl xmlns=""""
-						                    i:type=""AxFormButtonGroupControl"">
+						                    i_type=""AxFormButtonGroupControl"">
 						                    <Name>Txt</Name>
 						                    <Type>ButtonGroup</Type>
 						                    <FormControlExtension
@@ -547,7 +633,7 @@ public class $Name extends FormRun
 				                    </Controls>
 			                    </AxFormControl>
 			                    <AxFormControl xmlns=""""
-				                    i:type=""AxFormGroupControl"">
+				                    i_type=""AxFormGroupControl"">
 				                    <Name>FormGroup</Name>
 				                    <Pattern>CustomAndQuickFilters</Pattern>
 				                    <PatternVersion>1.1</PatternVersion>
@@ -587,14 +673,14 @@ public class $Name extends FormRun
 				                    <ViewEditMode>Edit</ViewEditMode>
 			                    </AxFormControl>
 			                    <AxFormControl xmlns=""""
-				                    i:type=""AxFormGridControl"">
+				                    i_type=""AxFormGridControl"">
 				                    <Name>Grid</Name>
 				                    <Type>Grid</Type>
 				                    <FormControlExtension
 					                    i:nil=""true"" />
 				                    <Controls>
 					                    <AxFormControl xmlns=""""
-						                    i:type=""AxFormStringControl"">
+						                    i_type=""AxFormStringControl"">
 						                    <Name>Grid_AssortmentGroupId</Name>
 						                    <Type>String</Type>
 						                    <FormControlExtension
@@ -615,11 +701,15 @@ public class $Name extends FormRun
     # AxFormDataSourceField
     $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField = [System.Collections.Generic.List[Object]] $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField
     $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField.RemoveAt(0)
-    $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField.AddRange($AxFormDataSourceFields)
+    $AxFormDataSourceFields | ForEach-Object {
+        $axSimpleListForm.AxForm.DataSources.AxFormDataSource.Fields.AxFormDataSourceField.Add($_.AxFormDataSourceField)
+    }
     # AxFormControl
-    $axSimpleListForm.AxForm.Design.Controls.AxFormControl = [System.Collections.Generic.List[Object]] $axSimpleListForm.AxForm.Design.Controls.AxFormControl
-    $axSimpleListForm.AxForm.Design.Controls.AxFormControl.RemoveAt(2)
-    $axSimpleListForm.AxForm.Design.Controls.AxFormControl.AddRange($AxFormControls)
+    $axSimpleListForm.AxForm.Design.Controls.AxFormControl[2].Controls.AxFormControl = [System.Collections.Generic.List[Object]] $axSimpleListForm.AxForm.Design.Controls.AxFormControl[2].Controls.AxFormControl
+    $axSimpleListForm.AxForm.Design.Controls.AxFormControl[2].Controls.AxFormControl.RemoveAt(0)
+    $AxFormControls | ForEach-Object {
+        $axSimpleListForm.AxForm.Design.Controls.AxFormControl[2].Controls.AxFormControl.Add($_.AxFormControl)
+    }
 
     $axSimpleListForm
 }
@@ -690,13 +780,17 @@ function New-AxProjectContent {
 
 function New-AxProject {
     param (
-        [String]     $Name       = "AxProject",
-        [String]     $Model      = "FleetManagement",
-        [String]     $guid       = [Guid]::NewGuid(),
-        [Object[]]   $AxEnums    = @(),
-        [Object[]]   $AxEdts     = @(),
-        [Object[]]   $AxTables   = @()
+        [String]     $Name           = "AxProject",
+        [String]     $guid           = [Guid]::NewGuid(),
+        [Object[]]   $AxEnums        = @(),
+        [Object[]]   $AxEdts         = @(),
+        [Object[]]   $AxTables       = @(),
+        [Object[]]   $AxForms        = @(),
+        [Object]     $AxModelInfo    = (New-AxModelInfo),
+        [Object]     $AxDescriptor   = (New-AxPackageDescriptor)
+
     )
+    $modelName = $AxModelInfo.AxModelInfo.Name
     $projectContents = ""
     $axEnumContents   = $AxEnums   | ForEach-Object { 
         $content = New-AxProjectContent -AxType "AxEnum"   -Name $_.AxEnum.Name
@@ -710,6 +804,10 @@ function New-AxProject {
         $content = New-AxProjectContent -AxType "AxTable"  -Name $_.AxTable.Name
         $projectContents += $content
     }
+    $axFormContents  = $AxForms  | ForEach-Object {
+        $content = New-AxProjectContent -AxType "AxForm"  -Name $_.AxForm.Name
+        $projectContents += $content
+    }
 
     [XML]$axXml = "<?xml version=""1.0"" encoding=""utf-8""?>
                     <Project ToolsVersion=""14.0"" DefaultTargets=""Build"" xmlns=""http://schemas.microsoft.com/developer/msbuild/2003"">
@@ -717,7 +815,7 @@ function New-AxProject {
                         <Configuration Condition="" '`$(Configuration)' == '' "">Debug</Configuration>
                         <Platform Condition="" '`$(Platform)' == '' "">AnyCPU</Platform>
                         <BuildTasksDirectory Condition="" '`$(BuildTasksDirectory)' == ''"">`$(MSBuildProgramFiles32)\MSBuild\Microsoft\Dynamics\AX</BuildTasksDirectory>
-                        <Model>$Model</Model>
+                        <Model>$modelName</Model>
                         <TargetFrameworkVersion>v4.6</TargetFrameworkVersion>
                         <OutputPath>bin</OutputPath>
                         <SchemaVersion>2.0</SchemaVersion>
@@ -748,52 +846,115 @@ function New-AxProject {
                       <Import Project=""`$(BuildTasksDirectory)\Microsoft.Dynamics.Framework.Tools.BuildTasks.targets"" />
                     </Project>"
 
-                      #<ItemGroup>
-                      #  <Folder Include=""Contents\"" />
-                      #</ItemGroup>
-
-    $axProject = ConvertFrom-AxXml -AxXml $axXml
-    $axProject
+    $project = ConvertFrom-AxXml -AxXml $axXml
+    [PSCustomObject] @{
+        AxEnums       = $AxEnums 
+        AxEdts        = $AxEdts  
+        AxTables      = $AxTables
+        AxForms       = $AxForms 
+        Project       = $project
+        AxModelInfo   = $AxModelInfo
+        AxDescriptor  = $AxDescriptor
+    }
 }
 
-$enum                  = New-AxEnum -Name "pepito" -AxEnumValues @((New-AxEnumValue -Name "pp" -Label "kk" ), (New-AxEnumValue -Name "pp2" -Label "kk2" ))
-$idEdt                 = New-AxEdt -Name "pepId" -Label "@FOR01" -BaseEdt AxEdtString -ReferenceTable Customer -RelatedField FirstName
-$descriptionEdt        = New-AxEdt -Name "pepDescription" -Label "@FOR02" -BaseEdt AxEdtString
-$idTableField          = ConvertTo-AxTableFieldFromAxEdt -AxEdt $idEdt
-$descriptionTableField = ConvertTo-AxTableFieldFromAxEdt -AxEdt $descriptionEdt
-$pepitoTableField      = ConvertTo-AxTableFieldFromAxEnum -AxEnum $enum
-$tableGroupField       = ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTableField $descriptionTableField
-$tableFieldGroup       = New-AxTableFieldGroup      -Name MyTableGroup  -Label "@FOR03" -AxTableFieldGroupFields @($tableGroupField)
-$tableFieldRelation    = New-AxTableFieldRelation   -RelatedTable InventTable -RelatedField ItemId
-$masterTable           = New-AxMasterTable          -Name MyMasterTable -Label "@FOR04" -AxTableFields @($idTableField, $descriptionTableField, $pepitoTableField) -AxTableFieldGroups @($tableFieldGroup) -AxTableRelations @($tableFieldRelation)
-$dsField0              = New-AxFormDataSourceField  -FieldName $masterTable.AxTable.Fields.AxTableField[0].Name
-$dsField1              = New-AxFormDataSourceField  -FieldName $masterTable.AxTable.Fields.AxTableField[1].Name
-$control0              = ConvertTo-AxFormControlFromAxTableField -AxTableField $idTableField -DataSourceName $masterTable.AxTable.Name
-$control1              = ConvertTo-AxFormControlFromAxTableField -AxTableField $descriptionTableField -DataSourceName $masterTable.AxTable.Name
-$masterTableForm       = New-AxSimpleListForm       -AxTable $masterTable -AxFormDataSourceFields @($dsField0, $dsField1) -AxFormControls @($control0, $control1)
-$modelInfo             = New-AxModelInfo
-$project               = New-AxProject              -Name MyProject     -AxEnums $enum -AxEdts @($idEdt, $descriptionEdt) -AxTables $masterTable
-$descriptor            = New-AxPackageDescriptor
+function Save-AxProject {
+    param (
+        $AxProject,
+        [String]     $BasePath        = [Environment]::GetFolderPath('MyDocuments') + "\FOProjects",
+        [String]     $ProjectPath     = $BasePath +"\" + $AxProject.Project.Project.PropertyGroup[0].Name
+    )
+    $projectName    = $AxProject.Project.Project.PropertyGroup[0].Name
+    $modelInfoName  = $AxProject.AxModelInfo.AxModelInfo.Name
 
-Remove-Item "C:\WINDOWS\TEMP\TestFO" -Recurse -Force
+    Remove-Item $ProjectPath -Recurse -Force -ErrorAction SilentlyContinue
 
-MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEnum"  -ErrorAction SilentlyContinue | Out-Null
-MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEdt"   -ErrorAction SilentlyContinue | Out-Null
-MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxTable" -ErrorAction SilentlyContinue | Out-Null
-MkDir "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxForm"  -ErrorAction SilentlyContinue | Out-Null
-MkDir "C:\WINDOWS\TEMP\TestFO\Model"               -ErrorAction SilentlyContinue | Out-Null
-MkDir "C:\WINDOWS\TEMP\TestFO\Project"             -ErrorAction SilentlyContinue | Out-Null
+    MkDir "$ProjectPath\ProjectItem\AxEnum"  -ErrorAction SilentlyContinue | Out-Null
+    MkDir "$ProjectPath\ProjectItem\AxEdt"   -ErrorAction SilentlyContinue | Out-Null
+    MkDir "$ProjectPath\ProjectItem\AxTable" -ErrorAction SilentlyContinue | Out-Null
+    MkDir "$ProjectPath\ProjectItem\AxForm"  -ErrorAction SilentlyContinue | Out-Null
+    MkDir "$ProjectPath\Model"               -ErrorAction SilentlyContinue | Out-Null
+    MkDir "$ProjectPath\Project"             -ErrorAction SilentlyContinue | Out-Null
 
-Save-AxObject -InputObject $enum             -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEnum\pepito.xml"
-Save-AxObject -InputObject $idEdt            -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEdt\pepId.xml"
-Save-AxObject -InputObject $descriptionEdt   -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxEdt\pepDescription.xml"
-Save-AxObject -InputObject $masterTable      -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxTable\MyMasterTable.xml"
-Save-AxObject -InputObject $masterTableForm  -Path "C:\WINDOWS\TEMP\TestFO\ProjectItem\AxForm\MyMasterTableForm.xml"
-Save-AxObject -InputObject $modelInfo        -Path "C:\WINDOWS\TEMP\TestFO\Model\FleetManagement.xml"
-Save-AxObject -InputObject $project          -Path "C:\WINDOWS\TEMP\TestFO\Project\MyProject.rnrproj"
-Save-AxObject -InputObject $descriptor       -Path "C:\WINDOWS\TEMP\TestFO\BA6BECB9-70B9-4E31-BD29-1A3725A0BA4F.xml"
+    $AxProject.AxEnums   | ForEach-Object {
+        Save-AxObject -InputObject $_ -Path "$ProjectPath\ProjectItem\AxEnum\$($_.AxEnum.Name).xml"
+    }
+    $AxProject.AxEdts    | ForEach-Object {
+        Save-AxObject -InputObject $_ -Path "$ProjectPath\ProjectItem\AxEdt\$($_.AxEdt.Name).xml"
+    }
+    $AxProject.AxTables  | ForEach-Object {
+        Save-AxObject -InputObject $_ -Path "$ProjectPath\ProjectItem\AxTable\$($_.AxTable.Name).xml"
+    }
+    $AxProject.AxForms   | ForEach-Object {
+        Save-AxObject -InputObject $_ -Path "$ProjectPath\ProjectItem\AxForm\$($_.AxForm.Name).xml"
+    }
+    
+    Save-AxObject -InputObject $AxProject.AxModelInfo     -Path "$ProjectPath\Model\$modelInfoName.xml"
+    Save-AxObject -InputObject $AxProject.Project         -Path "$ProjectPath\Project\$projectName.rnrproj"
+    Save-AxObject -InputObject $AxProject.AxDescriptor    -Path "$ProjectPath\BA6BECB9-70B9-4E31-BD29-1A3725A0BA4F.xml"
 
-Compress-Archive -Path "C:\WINDOWS\TEMP\TestFO\*" -DestinationPath "C:\WINDOWS\TEMP\TestFO.zip" -Force
-Remove-Item "C:\WINDOWS\TEMP\TestFO.axpp" -Force
-Rename-Item "C:\WINDOWS\TEMP\TestFO.zip" "C:\WINDOWS\TEMP\TestFO.axpp" -Force
+    Compress-Archive -Path "$ProjectPath\*" -DestinationPath "$BasePath\$projectName.zip" -Force
+    Remove-Item "$BasePath\$projectName.axpp" -Force -ErrorAction SilentlyContinue
+    Rename-Item "$BasePath\$projectName.zip" "$BasePath\$projectName.axpp" -Force
+}
 
+# Enums
+$familyStatusEnum = New-AxEnum -Name ForFamilyStatus -AxEnumValues @(
+    New-AxEnumValue -Name Active   -Label ActiveLabel
+    New-AxEnumValue -Name Inactive -Label InactiveLabel
+    New-AxEnumValue -Name Unknown  -Label UnknownLabel
+)
+# EDTs
+$familyIdEdt          = New-AxEdt -Name ForFamilyId          -Extends SysGroup    -ReferenceTable ForFamily -RelatedField FamilyId -Label FamilyLabel
+$familyDescriptionEdt = New-AxEdt -Name ForFamilyDescription -Extends Description
+# TableFields
+$idField          = ConvertTo-AxTableFieldFromAxEdt  -AxEdt  $familyIdEdt          -Name $familyIdEdt.AxEdt.Name.Substring(3)  -AllowEdit ([YesNo]::No)
+$descriptionField = ConvertTo-AxTableFieldFromAxEdt  -AxEdt  $familyDescriptionEdt -Name $familyDescriptionEdt.AxEdt.Name.Substring(3)
+$statusField      = ConvertTo-AxTableFieldFromAxEnum -AxEnum $familyStatusEnum     -Name $familyStatusEnum.AxEnum.Name.Substring(3)
+#$eventField = ConvertTo-AxTableFieldFromAxEdt  -AxEdt BusinessEventId       -Name BusinessEventId
+# FieldGrops
+$allFieldGroup = New-AxTableFieldGroup -Name All -Label AllLabel -AxTableFieldGroupFields @(
+    ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTableField $idField
+    ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTableField $descriptionField
+    ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTableField $statusField
+    #ConvertTo-AxTableFieldGroupFieldFromAxTableField -AxTableField $eventField
+)
+# Index
+$familyIdx = New-AxTableIndex -Name FamilyIdx -AlternateKey ([YesNo]::Yes) -AxTableIndexFields @(
+    ConvertTo-AxTableIndexFieldFromFromAxTableField -AxTableField $idField
+)
+# Table
+$familyTable = New-AxTable -Name ForFamily -SingularLabel "@FOR05" -Label "@FOR06" -AxTableFields @(
+    $idField         
+    $descriptionField
+    $statusField     
+    #$eventField
+) -AxTableFieldGroups @(
+    $allFieldGroup
+) -AxTableIndexes @(
+    $familyIdx
+) -AxTableRelations @(
+)
+# Form
+$familyForm = New-AxSimpleListForm -AxTable $familyTable -DSName $familyTable.AxTable.Name.Substring(3) -AxFormDataSourceFields @(
+    $idField, $descriptionField, $statusField | ForEach-Object {
+        New-AxFormDataSourceField -FieldName $_.AxTableField.Name
+    }
+) -AxFormControls @(
+    $idField, $descriptionField, $statusField | ForEach-Object {
+        ConvertTo-AxFormControlFromAxTableField -AxTableField $_ -DataSourceName $familyTable.AxTable.Name.Substring(3)
+    }
+)
+# Project
+$project = New-AxProject -Name MyProject -AxEnums @(
+    $familyStatusEnum
+) -AxEdts @(
+    $familyIdEdt         
+    $familyDescriptionEdt    
+) -AxTables @(
+    $familyTable
+) -AxForms @(
+    $familyForm
+)
+
+Save-AxProject -AxProject $project
