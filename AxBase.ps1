@@ -898,6 +898,14 @@ function Save-AxProject {
     Rename-Item "$BasePath\$projectName.zip" "$BasePath\$projectName.axpp" -Force
 }
 
+function Get-AxClassSource {
+    param (
+        [String] $Path
+    )
+    $xml = [xml] (Get-Content $Path)
+    $xml.AxClass.SourceCode.Methods | % { $_.Method.Source.'#cdata-section' }
+}
+
 # Enums
 $familyStatusEnum = New-AxEnum -Name ForFamilyStatus -AxEnumValues @(
     New-AxEnumValue -Name Active   -Label ActiveLabel
